@@ -1,54 +1,80 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+import matplotlib.pyplot as plt
+from datetime import datetime
+from fpdf import FPDF
+import base64
 
+# Configuración de la página
 st.set_page_config(page_title="Pronóstico de Venta", layout="centered")
 
+# 🔐 Autenticación
+password = st.text_input("Introduce la contraseña para acceder:", type="password")
+if password != "Kabah":
+    st.warning("Acceso restringido. Introduce la contraseña correcta para continuar.")
+    st.stop()
+
+# 🧾 Encabezado
 st.markdown("<h1 style='color:#FF4B4B; text-align:center;'>📊 Pronóstico de Venta</h1>", unsafe_allow_html=True)
-st.markdown("<h4 style='color:#333;'>Ingrese la venta promedio diaria de cada artículo (últimas 3 semanas):</h4>", unsafe_allow_html=True)
+st.markdown("Ingrese las ventas semanales en kilos de cada artículo:")
 
-articulos = {
-    "45955 Pollo rostizado": 0,
-    "292524 Milanesa de pollo": 0,
-    "39486 Pechuga sin hueso": 0,
-    "123988 Ala adobada (15 días)": 0,
-    "148377 Muslo sin hueso": 0,
-    "39481 Pechuga con hueso": 0,
-    "39480 Pollo entero": 0,
-}
+# 📦 Lista de artículos
+articulos = [
+    "45955 Pollo rostizado",
+    "292524 Milanesa de pollo",
+    "39486 Pechuga sin hueso",
+    "123988 Ala adobada",
+    "148377 Muslo sin hueso",
+    "39481 Pechuga con hueso",
+    "39480 Pollo entero"
+]
 
-col1, col2 = st.columns(2)
-ventas = {}
+# Entrada de datos
+data = []
+for articulo in articulos:
+    st.markdown(f"**{articulo}**")
+    semana1 = st.number_input(f"Semana 1 (kg) - {articulo}", min_value=0, step=1, key=f"{articulo}_s1")
+    semana2 = st.number_input(f"Semana 2 (kg) - {articulo}", min_value=0, step=1, key=f"{articulo}_s2")
+    semana3 = st.number_input(f"Semana 3 (kg) - {articulo}", min_value=0, step=1, key=f"{articulo}_s3")
+    data.append((articulo, semana1, semana2, semana3))
 
-for idx, (nombre, _) in enumerate(articulos.items()):
-    with (col1 if idx % 2 == 0 else col2):
-        ventas[nombre] = st.number_input(f"{nombre}", min_value=0.0, step=0.1)
+# Cálculos
+df = pd.DataFrame(data, columns=["Artículo", "Semana 1", "Semana 2", "Semana 3"])
+df["Promedio Diario (kg)"] = ((df["Semana 1"] + df["Semana 2"] + df["Semana 3"]) / 3) / 7
+df["Pronóstico 8 días (kg)"] = (df["Promedio Diario (kg)"] * 8).round(2)
+df["Cajas (15 kg)"] = (df["Pronóstico 8 días (kg)"] / 15).apply(lambda x: round(x, 2))
 
-st.markdown("---")
+# Mostrar tabla
+st.markdown("### 📋 Resultados del Pronóstico")
+st.dataframe(df[["Artículo", "Promedio Diario (kg)", "Pronóstico 8 días (kg)", "Cajas (15 kg)"]], use_container_width=True)
 
-# Selección de día de pedido
-dia_hoy = datetime.today().strftime('%A')
-st.markdown(f"<h5 style='color:#666;'>Hoy es: <b>{dia_hoy}</b></h5>", unsafe_allow_html=True)
+# Gráfica
+st.markdown("### 📈 Pronóstico Diario para los Próximos 8 Días")
+fig, ax = plt.subplots(figsize=(10, 5))
+dias = [f"Día {i+1}" for i in range(8)]
+for _, row in df.iterrows():
+    ax.plot(dias, [round(row["Promedio Diario (kg)"], 2)]*8, label=row["Artículo"])
+ax.set_ylabel("Kilos")
+ax.set_title("Pronóstico Diario por Artículo")
+ax.legend(loc="upper right", fontsize="small")
+st.pyplot(fig)
 
-pedido = st.selectbox("¿Qué día se realizará el pedido?", ["Lunes", "Jueves", "Sábado"])
+# PDF
+st.markdown("### 📄 Descargar Pronóstico en PDF")
 
-# Definir días de llegada según pedido
-llegadas = {"Lunes": "Viernes", "Jueves": "Lunes", "Sábado": "Miércoles"}
-dias_entre = {"Lunes": 4, "Jueves": 4, "Sábado": 4}  # Ajustable si cambia la logística
+def generar_pdf(dataframe):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(200, 10, "Pronóstico de Venta", ln=True, align="C")
+    pdf.ln(10)
+    pdf.set_font("Arial", "", 12)
+    for _, row in dataframe.iterrows():
+        texto = f"{row['Artículo']}: {row['Pronóstico 8 días (kg)']} kg - {row['Cajas (15 kg)']} cajas"
+        pdf.cell(0, 10, texto, ln=True)
+    return pdf.output(dest="S").encode("latin1")
 
-dias_a_calcular = dias_entre[pedido]
-
-# Cálculo de pronóstico
-st.markdown(f"<h4 style='color:#4CAF50;'>🟢 Pronóstico de Venta hasta el siguiente embarque ({dias_a_calcular} días):</h4>", unsafe_allow_html=True)
-
-df = pd.DataFrame(columns=["Artículo", "Venta Prom. Diaria", "Pronóstico"])
-
-for nombre, promedio in ventas.items():
-    caducidad = 15 if "Ala adobada" in nombre else 8
-    dias_validos = min(dias_a_calcular, caducidad)
-    pronostico = round(promedio * dias_validos, 2)
-    df.loc[len(df)] = [nombre, promedio, pronostico]
-
-st.dataframe(df, use_container_width=True)
-
-st.markdown("<small style='color:gray;'>* Los productos con caducidad de 8 días se limitan a ese número, incluso si el pedido cubre más días.</small>", unsafe_allow_html=True)
+pdf_bytes = generar_pdf(df)
+b64 = base64.b64encode(pdf_bytes).decode()
+href = f'<a href="data:application/pdf;base64,{b64}" download="pronostico_venta.pdf">📥 Descargar PDF</a>'
+st.markdown(href, unsafe_allow_html=True)
